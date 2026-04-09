@@ -1,0 +1,487 @@
+{
+  "name": "NBA Injury Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/5 16-23,0-3 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        -200
+      ],
+      "id": "mon-0001",
+      "name": "Alle 5 Min (Spielfenster)"
+    },
+    {
+      "parameters": {
+        "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        240,
+        -200
+      ],
+      "id": "mon-0002",
+      "name": "Get ESPN Injuries"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://YOUR_SERVER_IP:5001/injury_state",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "threshold",
+              "value": "0.5"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $input.all().map(i => ({ team_name: i.json.team_name, impact_score: i.json.final_impact_score, key_absences: i.json.key_absences })) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2160,
+        -100
+      ],
+      "id": "mon-0011",
+      "name": "Diff-Check gegen DB"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "mon-cond-01",
+              "leftValue": "={{ $json.changed.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2400,
+        -100
+      ],
+      "id": "mon-0012",
+      "name": "Änderungen vorhanden?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const changes = $input.first().json.changed || [];\nif (changes.length === 0) return [];\n\n// AI-Insights aus dem Aggregations-Node holen\nconst teamData = {};\ntry {\n  $('Aggregiere zu Teams').all().forEach(i => {\n    teamData[i.json.team_name] = i.json.ai_insights || [];\n  });\n} catch(e) {}\n\nlet message = '🚨 *NBA INJURY ALERT*\\n';\nmessage += `_${new Date().toLocaleTimeString('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' })} Uhr_\\n`;\nmessage += '━━━━━━━━━━━━━━━━\\n\\n';\n\nchanges.forEach(c => {\n  const dir  = c.diff > 0 ? '📈 Verschlechtert' : '📉 Verbessert';\n  const icon = c.diff > 0 ? '🔴' : '🟢';\n  message += `${icon} *${c.team_name}*\\n`;\n  message += `  ${dir}: ${c.old_score ?? 'neu'} → ${c.new_score} (${c.diff > 0 ? '+' : ''}${c.diff})\\n`;\n  if (c.key_absences?.length > 0) {\n    message += `  Ausfälle: ${c.key_absences.join(', ')}\\n`;\n  }\n  const insights = teamData[c.team_name] || [];\n  if (insights.length > 0) {\n    message += `  🤖 KI-Einschätzung:\\n`;\n    insights.slice(0, 2).forEach(ins => message += `    • ${ins}\\n`);\n  }\n  message += '\\n';\n});\n\nreturn [{ json: { message } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        -200
+      ],
+      "id": "mon-0013",
+      "name": "Formatiere Alert"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2880,
+        -200
+      ],
+      "id": "mon-0014",
+      "name": "Telegram Alert",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const STAR_WEIGHTS = {\n  \"Nikola Jokic\": 10, \"Luka Doncic\": 10, \"Giannis Antetokounmpo\": 10,\n  \"Shai Gilgeous-Alexander\": 10, \"Joel Embiid\": 10, \"Victor Wembanyama\": 10,\n  \"Jayson Tatum\": 9, \"Anthony Davis\": 9, \"LeBron James\": 9,\n  \"Kevin Durant\": 9, \"Stephen Curry\": 9, \"Zion Williamson\": 9,\n  \"Devin Booker\": 8, \"Jaylen Brown\": 8, \"Jalen Brunson\": 8,\n  \"Donovan Mitchell\": 8, \"Tyrese Haliburton\": 8, \"Jimmy Butler\": 8,\n  \"Paolo Banchero\": 8, \"LaMelo Ball\": 8, \"Karl-Anthony Towns\": 8,\n  \"Kawhi Leonard\": 8, \"Tyrese Maxey\": 8, \"Evan Mobley\": 8,\n  \"Trae Young\": 8, \"Domantas Sabonis\": 8, \"De'Aaron Fox\": 8, \"Ja Morant\": 8,\n  \"Franz Wagner\": 7, \"Cade Cunningham\": 7, \"Jaren Jackson Jr.\": 7,\n  \"Tyler Herro\": 7, \"DeMar DeRozan\": 7, \"James Harden\": 7,\n  \"Jarrett Allen\": 6, \"Trey Murphy III\": 6, \"OG Anunoby\": 6\n};\n\nconst STATUS_MULTIPLIER = {\n  \"Out\": 1.0,\n  \"Doubtful\": 0.75,\n  \"Questionable\": 0.5,\n  \"Day-To-Day\": 0.35,\n  \"Probable\": 0.15\n};\n\nconst AI_HINT_PATTERN = /(surgery|fracture|torn|tear|crutches|out indefinitely|season-ending|miss the remainder|re-?evaluat|did not practice|swelling|limping|cleared|full practice|making good progress|approved to participate|injection|week-to-week)/i;\nconst FAST_LANE_PATTERN = /(is|has been|was|will be|remains)?\\s*(ruled out|listed as out|out for|questionable for|probable for|won't play|will not play)/i;\n\nconst injuryData = $input.first().json;\nconst result = [];\n\nfor (const team of injuryData.injuries || []) {\n  for (const inj of team.injuries || []) {\n    const player = inj.athlete?.displayName || 'Unknown';\n    const status = inj.status || 'Unknown';\n    const comment = inj.shortComment || '';\n    const normalized = comment.trim();\n    const baseWeight = STAR_WEIGHTS[player] || 1.5;\n    const multi = STATUS_MULTIPLIER[status] ?? 0.4;\n    const baseImpact = Number((baseWeight * multi).toFixed(2));\n    const hasStrongSignal = AI_HINT_PATTERN.test(normalized);\n    const isStarOrHighImpact = baseImpact > 5;\n    const isBoilerplate = FAST_LANE_PATTERN.test(normalized) && !hasStrongSignal;\n    const needsAi = isStarOrHighImpact || (normalized.length > 0 && hasStrongSignal && !isBoilerplate);\n\n    result.push({\n      json: {\n        team_name: team.displayName,\n        player,\n        player_name: player,\n        status,\n        short_comment: comment,\n        shortComment: comment,\n        base_weight: baseWeight,\n        base_impact: baseImpact,\n        needs_ai: needsAi,\n        fast_lane_reason: needsAi ? null : 'Fast-Lane: Status/Basis-Impact reichen aus'\n      }\n    });\n  }\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        -200
+      ],
+      "id": "ollama-split-players",
+      "name": "Extrahiere Spieler"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "needs-ai-cond",
+              "leftValue": "={{ $json.needs_ai }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        720,
+        -200
+      ],
+      "id": "ollama-smart-filter",
+      "name": "Smart-Filter KI?"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Rate this NBA injury note for {{ $json.player_name }} (status: {{ $json.status }}): \"{{ $json.shortComment }}\"",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Act as an NBA medical analyst. Analyze the following 'shortComment'.\nYour goal is to determine if the injury sounds worse or better than the official status.\n\nScoring Rules:\n\n1.3 to 1.5: Critical (keywords: \"surgery\", \"crutches\", \"indefinite\", \"walking boot\").\n\n1.1 to 1.2: Negative trend (keywords: \"limping\", \"swelling\", \"did not practice\").\n\n1.0: Neutral / Standard info.\n\n0.7 to 0.9: Positive trend (keywords: \"probable\", \"intends to play\", \"cleared\").\n\nConstraint: Output ONLY valid JSON.\nFormat: {\"ai_adjustment\": float, \"ai_reason\": \"string (German)\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [
+        960,
+        -200
+      ],
+      "id": "ollama-comment-analysis",
+      "name": "Ollama Kommentar-Analyse"
+    },
+    {
+      "parameters": {
+        "model": "llama3.1:8b",
+        "options": {
+          "temperature": 0.2,
+          "numPredict": 50,
+          "numThread": 8,
+          "keepAlive": "1h"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "typeVersion": 1,
+      "position": [
+        960,
+        -380
+      ],
+      "id": "ollama-chat-model",
+      "name": "Llama 3.1 8B",
+      "credentials": {
+        "ollamaApi": {
+          "id": "YOUR_OLLAMA_CREDENTIAL_ID",
+          "name": "Ollama account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\n\nfunction extractJsonObject(raw) {\n  const cleaned = String(raw || '{}').replace(/```json|```/gi, '').trim();\n  const match = cleaned.match(/\\{[\\s\\S]*\\}/);\n  return match ? match[0] : '{}';\n}\n\nlet aiData = { ai_adjustment: 1.0, ai_reason: 'Keine Analyse' };\ntry {\n  const raw = j.text || j.output || j.response || j.content || '{}';\n  aiData = JSON.parse(extractJsonObject(raw));\n} catch (e) {}\n\nconst adj = Math.min(Math.max(Number(aiData.ai_adjustment) || 1.0, 0.7), 1.5);\n\nreturn [{ json: {\n  ...j,\n  ai_adjustment: adj,\n  ai_reason: aiData.ai_reason || 'Keine Begruendung',\n  final_impact: Number((j.base_impact * adj).toFixed(2))\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -200
+      ],
+      "id": "ollama-apply-factor",
+      "name": "Wende AI-Faktor an"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nreturn [{ json: {\n  ...item,\n  ai_adjustment: 1.0,\n  ai_reason: item.fast_lane_reason || null,\n  final_impact: item.base_impact\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ],
+      "id": "ollama-fast-lane",
+      "name": "Fast-Lane Faktor 1.0"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1680,
+        -100
+      ],
+      "id": "ollama-merge-results",
+      "name": "Zusammenfuehren"
+    },
+    {
+      "parameters": {
+        "jsCode": "const players = $input.all()\n  .map(i => i.json)\n  .filter(p => p && typeof p === 'object' && p.team_name && p.player);\n\nconst teams = {};\n\nfor (const p of players) {\n  if (!teams[p.team_name]) {\n    teams[p.team_name] = { team_name: p.team_name, players: [] };\n  }\n  teams[p.team_name].players.push(p);\n}\n\nreturn Object.values(teams).map(t => ({ json: t }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -100
+      ],
+      "id": "ollama-aggregate-teams",
+      "name": "Aggregiere zu Teams"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────────────────────\n// PROBLEM: Qwen 3.5 (und andere \"thinking\"-Modelle) schicken vor der eigentlichen\n// Antwort eine Gedankenkette im Format:\n//   \"Thinking Process...\\n{...json...}\"\n// oder:\n//   \"<think>...</think>\\n{...json...}\"\n//\n// n8n versucht den kompletten String als JSON zu parsen → Fehler:\n//   \"Unexpected token T, Thinking P is not valid JSON\"\n//\n// LÖSUNG: Wir suchen mit Regex nach dem ersten { und letzten }\n// und extrahieren nur diesen Teil als JSON-String.\n// ─────────────────────────────────────────────────────────────────────────────\n\nreturn $input.all().map(item => {\n\n  // Der AI-Node gibt sein Ergebnis im Feld \"text\" oder \"output\" zurück.\n  // Wir probieren beide Felder — je nach n8n-Version kann es unterschiedlich heißen.\n  const rawText = item.json.text || item.json.output || item.json.message || '';\n\n  // ── Schritt 1: <think>-Block entfernen ─────────────────────────────────────\n  // Manche Modelle wrappen ihre Gedanken in <think>...</think> Tags.\n  // \\s* = beliebig viele Whitespace-Zeichen (auch Zeilenumbrüche)\n  // [\\s\\S]*? = beliebig viele Zeichen (auch Zeilenumbrüche), nicht-gierig (?\n  //   bedeutet: so wenig wie möglich matchen, nicht so viel wie möglich)\n  const withoutThinkTags = rawText.replace(/<think>[\\s\\S]*?<\\/think>/gi, '');\n\n  // ── Schritt 2: JSON-Block mit Regex isolieren ───────────────────────────────\n  // Wir suchen nach dem ERSTEN { und dem LETZTEN } im Text.\n  //\n  // Regex-Erklärung: /\\{[\\s\\S]*\\}/\n  //   \\{        = literales öffnendes {  (muss escaped werden, da { in Regex Bedeutung hat)\n  //   [\\s\\S]*   = beliebig viele Zeichen INKLUSIVE Zeilenumbrüchen\n  //               (\\s = Whitespace, \\S = kein Whitespace → zusammen = ALLES)\n  //               Das normale . matcht keine Zeilenumbrüche, daher dieser Trick\n  //   \\}        = literales schließendes }\n  //\n  // Ohne das 'g'-Flag findet match() den ersten Treffer und gibt ihn zurück.\n  // Ohne das '?'-Flag ist der Ausdruck \"gierig\" (greedy): er matched vom ersten {\n  // bis zum LETZTEN } — genau was wir wollen bei verschachteltem JSON.\n  const jsonMatch = withoutThinkTags.match(/\\{[\\s\\S]*\\}/);\n\n  // ── Schritt 3: Parsen oder Fallback ────────────────────────────────────────\n  if (jsonMatch) {\n    // jsonMatch[0] = der gesamte gematchte String (erstes Element beim non-g match)\n    const jsonString = jsonMatch[0];\n\n    try {\n      // JSON.parse() konvertiert den String in ein echtes JavaScript-Objekt.\n      // Danach kann n8n auf die Felder direkt zugreifen: $json.ai_adjustment\n      const parsed = JSON.parse(jsonString);\n\n      // Sicherheitsnetz: ai_adjustment muss eine Zahl zwischen 0.5 und 1.5 sein.\n      // Falls das Modell einen unplausiblen Wert ausgibt (z.B. 5.0), clampen wir ihn.\n      // Math.max/min ist ein klassischer Clamp-Trick: Math.max(min, Math.min(max, value))\n      const adjustment = typeof parsed.ai_adjustment === 'number'\n        ? Math.max(0.5, Math.min(1.5, parsed.ai_adjustment))\n        : 1.0;\n\n      return {\n        json: {\n          // Alle bisherigen Felder des Items behalten (Spielername, Status etc.)\n          ...item.json,\n          // Geparste Felder überschreiben/ergänzen\n          ai_adjustment: adjustment,\n          ai_reason:     parsed.ai_reason || 'kein Grund angegeben',\n          // Debug-Feld: zeigt was das Modell wirklich geschickt hat\n          // Nützlich wenn man nachvollziehen will warum ein Wert gesetzt wurde\n          _raw_ollama_json: jsonString\n        }\n      };\n\n    } catch (parseError) {\n      // JSON.parse hat einen Fehler geworfen — der extrahierte String ist\n      // kein valides JSON (z.B. abgeschnitten, Sonderzeichen etc.)\n      // Wir loggen den Fehler und setzen Fallback-Werte.\n      return {\n        json: {\n          ...item.json,\n          ai_adjustment: 1.0,\n          ai_reason:     `JSON-Parse-Fehler: ${parseError.message}`,\n          _parse_error:  true,\n          _raw_text:     rawText.slice(0, 200)  // nur erste 200 Zeichen für Debug\n        }\n      };\n    }\n\n  } else {\n    // Kein { } gefunden im Ollama-Output — das Modell hat kein JSON zurückgegeben.\n    // Mögliche Ursachen: Modell antwortet auf Deutsch/Englisch statt JSON,\n    // oder der Output ist leer weil Ollama Timeout hatte.\n    return {\n      json: {\n        ...item.json,\n        ai_adjustment: 1.0,  // neutraler Wert: keine Anpassung\n        ai_reason:     'Kein JSON in Ollama-Antwort gefunden — Fallback 1.0',\n        _parse_error:  true,\n        _raw_text:     rawText.slice(0, 200)\n      }\n    };\n  }\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        -200
+      ],
+      "id": "ollama-parse-json",
+      "name": "Parse Ollama JSON"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Alle 5 Min (Spielfenster)": {
+      "main": [
+        [
+          {
+            "node": "Get ESPN Injuries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ESPN Injuries": {
+      "main": [
+        [
+          {
+            "node": "Extrahiere Spieler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrahiere Spieler": {
+      "main": [
+        [
+          {
+            "node": "Smart-Filter KI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Smart-Filter KI?": {
+      "main": [
+        [
+          {
+            "node": "Ollama Kommentar-Analyse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fast-Lane Faktor 1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Kommentar-Analyse": {
+      "main": [
+        [
+          {
+            "node": "Parse Ollama JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wende AI-Faktor an": {
+      "main": [
+        [
+          {
+            "node": "Zusammenfuehren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fast-Lane Faktor 1.0": {
+      "main": [
+        [
+          {
+            "node": "Zusammenfuehren",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Zusammenfuehren": {
+      "main": [
+        [
+          {
+            "node": "Aggregiere zu Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregiere zu Teams": {
+      "main": [
+        [
+          {
+            "node": "Diff-Check gegen DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Berechne Impact Scores": {
+      "main": [
+        [
+          {
+            "node": "Diff-Check gegen DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Diff-Check gegen DB": {
+      "main": [
+        [
+          {
+            "node": "Änderungen vorhanden?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Änderungen vorhanden?": {
+      "main": [
+        [
+          {
+            "node": "Formatiere Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatiere Alert": {
+      "main": [
+        [
+          {
+            "node": "Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Ollama JSON": {
+      "main": [
+        [
+          {
+            "node": "Wende AI-Faktor an",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Llama 3.1 8B": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Ollama Kommentar-Analyse",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

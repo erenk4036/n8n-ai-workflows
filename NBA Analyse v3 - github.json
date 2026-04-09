@@ -1,0 +1,559 @@
+{
+  "name": "NBA Analyse",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 23 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "11c52ecd-7f8f-454f-a3cb-b87dfdd3e31a",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        416,
+        0
+      ],
+      "id": "0ead0bab-d554-4a04-afce-4b26127e2461",
+      "name": "Get NBA Injuries"
+    },
+    {
+      "parameters": {
+        "url": "https://api.the-odds-api.com/v4/sports/basketball_nba/odds",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "apiKey",
+              "value": "YOUR_ODDS_API_KEY"
+            },
+            {
+              "name": "regions",
+              "value": "eu"
+            },
+            {
+              "name": "markets",
+              "value": "h2h,spreads,totals"
+            },
+            {
+              "name": "oddsFormat",
+              "value": "decimal"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        208,
+        0
+      ],
+      "id": "bfbbabae-feec-473b-a817-22b2a58c0efd",
+      "name": "Get NBA Odds"
+    },
+    {
+      "parameters": {
+        "jsCode": "function round(num, digits = 3) {\n  return Number(num.toFixed(digits));\n}\n\nfunction median(arr) {\n  if (!arr.length) return null;\n  const sorted = [...arr].sort((a, b) => a - b);\n  const mid = Math.floor(sorted.length / 2);\n  return sorted.length % 2\n    ? sorted[mid]\n    : (sorted[mid - 1] + sorted[mid]) / 2;\n}\n\nconst oddsData = $('Get NBA Odds').all();\n\nconst games = oddsData\n  .map(item => item.json)\n  .filter(game => Array.isArray(game.bookmakers) && game.bookmakers.length > 0)\n  .map(game => {\n    const homeOdds = [];\n    const awayOdds = [];\n    const homeSpreads = [];\n    const awaySpreads = [];\n    const totals = [];\n\n    for (const bm of game.bookmakers) {\n      if (!Array.isArray(bm.markets)) continue;\n\n      const h2h = bm.markets.find(m => m.key === 'h2h');\n      if (h2h?.outcomes) {\n        for (const outcome of h2h.outcomes) {\n          if (outcome.name === game.home_team) homeOdds.push(outcome.price);\n          if (outcome.name === game.away_team) awayOdds.push(outcome.price);\n        }\n      }\n\n      const spreads = bm.markets.find(m => m.key === 'spreads');\n      if (spreads?.outcomes) {\n        for (const outcome of spreads.outcomes) {\n          if (outcome.name === game.home_team && outcome.point != null) {\n            homeSpreads.push(outcome.point);\n          }\n          if (outcome.name === game.away_team && outcome.point != null) {\n            awaySpreads.push(outcome.point);\n          }\n        }\n      }\n\n      const totalsMarket = bm.markets.find(m => m.key === 'totals');\n      if (totalsMarket?.outcomes) {\n        for (const outcome of totalsMarket.outcomes) {\n          if (outcome.point != null) totals.push(outcome.point);\n        }\n      }\n    }\n\n    if (!homeOdds.length || !awayOdds.length) return null;\n\n    const avgHomeOdds = homeOdds.reduce((a, b) => a + b, 0) / homeOdds.length;\n    const avgAwayOdds = awayOdds.reduce((a, b) => a + b, 0) / awayOdds.length;\n\n    const rawHome = 1 / avgHomeOdds;\n    const rawAway = 1 / avgAwayOdds;\n    const overround = rawHome + rawAway;\n\n    const noVigHomeProb = rawHome / overround;\n    const noVigAwayProb = rawAway / overround;\n\n    return {\n      game_id: game.id,\n      commence_time: game.commence_time,\n      home_team: game.home_team,\n      away_team: game.away_team,\n\n      avg_home_odds: round(avgHomeOdds, 2),\n      avg_away_odds: round(avgAwayOdds, 2),\n\n      best_home_odds: round(Math.max(...homeOdds), 2),\n      best_away_odds: round(Math.max(...awayOdds), 2),\n\n      median_home_odds: round(median(homeOdds), 2),\n      median_away_odds: round(median(awayOdds), 2),\n\n      market_home_prob_novig: round(noVigHomeProb, 4),\n      market_away_prob_novig: round(noVigAwayProb, 4),\n\n      avg_home_spread: homeSpreads.length\n        ? round(homeSpreads.reduce((a, b) => a + b, 0) / homeSpreads.length, 2)\n        : null,\n\n      avg_away_spread: awaySpreads.length\n        ? round(awaySpreads.reduce((a, b) => a + b, 0) / awaySpreads.length, 2)\n        : null,\n\n      avg_total: totals.length\n        ? round(totals.reduce((a, b) => a + b, 0) / totals.length, 2)\n        : null,\n\n      bookmaker_count: game.bookmakers.length\n    };\n  })\n  .filter(Boolean);\n\nreturn games.map(game => ({ json: game }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        0
+      ],
+      "id": "df5be08f-a697-460b-8405-1131673501a7",
+      "name": "Extract Teams"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://YOUR_SERVER_IP:5001/stats",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"game_id\": \"{{ $json.game_id }}\",\n  \"commence_time\": \"{{ $json.commence_time }}\",\n  \"game_date\": \"{{ $json.commence_time ? $json.commence_time.substring(0, 10) : null }}\",\n  \"home_team\": \"{{ $json.home_team_normalized }}\",\n  \"away_team\": \"{{ $json.away_team_normalized }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1424,
+        128
+      ],
+      "id": "6a1cf05e-265b-4821-9c38-81a7cd21617f",
+      "name": "Get Team Stats"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Du bist ein quantitativer NBA Wettanalyst. Du bekommst Modell-Output und validierst den Pick anhand der Daten.\n\nDEINE AUFGABE:\n1. Prüfe ob die Datenlage den Pick stützt\n2. Erkenne Red Flags (Back-to-Back, Schlüsselverletzungen, schlechte Form, niedriger EV)\n3. Entscheide eigenständig: JA SETZEN oder NICHT SETZEN\n4. Begründe mit konkreten Zahlen aus den Daten – keine Spekulation\n\nREGELN:\n- Maximal 2 Sätze Begründung\n- Nur Fakten aus den gegebenen Daten\n- Bei Confidence Niedrig + Red Flag → NICHT SETZEN\n- Halte dich exakt ans Output-Format\n\n=== SPIEL ===\n{{ $json.home_team }} vs {{ $json.away_team }}\n\n=== MODELL-PICK ===\nPick: {{ $json.value_side }} @ {{ $json.value_odds }}\nEV: {{ ($json.value_side === $json.home_team ? $json.ev_home : $json.ev_away).toFixed(3) }}\nModel Prob: Home {{ Math.round($json.model_home_prob * 100) }}% | Away {{ Math.round($json.model_away_prob * 100) }}%\nMarkt No-Vig: Home {{ Math.round($json.market_home_prob_novig * 100) }}% | Away {{ Math.round($json.market_away_prob_novig * 100) }}%\nMarkt-Abweichung: {{ ($json.guardrails?.divergence * 100).toFixed(1) }}% | Prob-Gap: {{ ($json.guardrails?.prob_gap * 100).toFixed(1) }}%\nConfidence: {{ $json.confidence }}\n\n=== STATS (letzte 10 Spiele) ===\n{{ $json.home_team }}: {{ $json.home_stats.last_10_record }} | Ø {{ $json.home_stats.avg_pts }} Pkt | Gegner Ø {{ $json.home_stats.avg_opp_pts }} Pkt | NetΔ {{ $json.home_stats.net_pts_diff }} | FG {{ $json.home_stats.avg_fg_pct }}% | 3P {{ $json.home_stats.avg_fg3_pct }}% | TOV {{ $json.home_stats.avg_tov }}\n{{ $json.away_team }}: {{ $json.away_stats.last_10_record }} | Ø {{ $json.away_stats.avg_pts }} Pkt | Gegner Ø {{ $json.away_stats.avg_opp_pts }} Pkt | NetΔ {{ $json.away_stats.net_pts_diff }} | FG {{ $json.away_stats.avg_fg_pct }}% | 3P {{ $json.away_stats.avg_fg3_pct }}% | TOV {{ $json.away_stats.avg_tov }}\nSpread: {{ $json.avg_home_spread }} | Total: {{ $json.avg_total }}\nRest (Home): {{ $json.home_stats.rest_days }}T | Rest (Away): {{ $json.away_stats.rest_days }}T\n\n=== FORM & FATIGUE ===\n{{ $json.home_team }}: Streak {{ $json.home_stats.streak }}{{ $json.home_stats.back_to_back ? ' | ⚠️ BACK-TO-BACK' : '' }}\n{{ $json.away_team }}: Streak {{ $json.away_stats.streak }}{{ $json.away_stats.back_to_back ? ' | ⚠️ BACK-TO-BACK' : '' }}\n\n=== HEAD-TO-HEAD ===\n{{ $json.h2h && $json.h2h.available ? $json.home_team + ' ' + $json.h2h.home_team_wins + '-' + $json.h2h.away_team_wins + ' ' + $json.away_team + ' (letzte ' + $json.h2h.games_found + ' Spiele) | Ø Diff: ' + $json.h2h.avg_point_diff + ' Pkte | H2H Total: ' + ($json.h2h.avg_game_total || 'N/A') : 'Keine H2H-Daten' }}\n\n=== VERLETZUNGEN ===\n{{ $json.home_team }} Score: {{ $json.home_injuries_structured.injury_impact_score }} | Out: {{ ($json.home_injuries_structured.key_absences || []).join(', ') || 'keine' }}\n  Off-Impact: {{ $json.home_injuries_structured.injury_profile?.offense_impact || 0 }} | Def: {{ $json.home_injuries_structured.injury_profile?.defense_impact || 0 }} | Shooting: {{ $json.home_injuries_structured.injury_profile?.shooting_impact || 0 }} | Rim: {{ $json.home_injuries_structured.injury_profile?.rim_protection_impact || 0 }}\n{{ $json.away_team }} Score: {{ $json.away_injuries_structured.injury_impact_score }} | Out: {{ ($json.away_injuries_structured.key_absences || []).join(', ') || 'keine' }}\n  Off-Impact: {{ $json.away_injuries_structured.injury_profile?.offense_impact || 0 }} | Def: {{ $json.away_injuries_structured.injury_profile?.defense_impact || 0 }} | Shooting: {{ $json.away_injuries_structured.injury_profile?.shooting_impact || 0 }} | Rim: {{ $json.away_injuries_structured.injury_profile?.rim_protection_impact || 0 }}\n\n=== FEATURE EDGES ===\nForm {{ $json.feature_breakdown.form_edge }} | FG {{ $json.feature_breakdown.fg_edge }} | Injury {{ $json.feature_breakdown.injury_edge }} | NetRtg {{ $json.feature_breakdown.net_rating_edge }} | Streak {{ $json.feature_breakdown.streak_edge }} | B2B {{ $json.feature_breakdown.b2b_edge }} | H2H {{ $json.feature_breakdown.h2h_edge }}\nMarktKorrektur: roh={{ $json.market_correction?.raw_edge?.toFixed(4) }} → geclampt={{ $json.market_correction?.clamped_edge?.toFixed(4) }} (max±{{ $json.market_correction?.max_deviation }})\n\n=== TOTALS ===\n{{ $json.totals_pick?.direction ? 'Signal: ' + $json.totals_pick.direction + ' ' + $json.totals_pick.line + ' | Erwartet: ' + $json.totals_pick.expected + ' | Stärke: ' + $json.totals_pick.signal_strength + ' | ' + ($json.totals_pick.reasons || []).join(', ') : 'Kein starkes Totals-Signal' }}\n\n=== DEIN OUTPUT – exakt dieses Format, keine Abweichungen ===\nSPIEL: {{ $json.home_team }} vs {{ $json.away_team }}\nTIPP: {{ $json.value_side }}\nQUOTE: {{ $json.value_odds }}\nKONFIDENZ: {{ $json.confidence }}\nBEGRÜNDUNG: [max. 2 Sätze, konkrete Zahlen]\nEMPFEHLUNG: JA SETZEN oder NICHT SETZEN",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2880,
+        -32
+      ],
+      "id": "343d7ad1-4e4f-4166-a47b-ddd6a2029447",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        2880,
+        288
+      ],
+      "id": "8065856b-b956-4c8e-b312-84f4007211f4",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────────────\n// Hilfsfunktionen\n// ─────────────────────────────────────────────────────────────────────\n\n// Streak-Label mit Emoji:\n// \"W4\" → \" 🔥W4\" (Gewinnstreak)\n// \"L3\" → \" ❄️L3\" (Verlustserie)\nfunction streakLabel(streak) {\n  if (!streak) return '';\n  return streak.startsWith('W') ? ` 🔥${streak}` : ` ❄️${streak}`;\n}\n\n// Momentum der letzten 2 Spiele als Pfeil-Emoji:\n// \"2/2\" (beide gewonnen) → ⬆️, \"0/2\" (beide verloren) → ⬇️\nfunction momentumLabel(momentum) {\n  if (momentum === '2/2') return ' ⬆️';\n  if (momentum === '0/2') return ' ⬇️';\n  return '';  // \"1/2\" = neutral, kein Symbol\n}\n\n// Head-to-Head Zeile formatieren\n// avg_game_total ist neu in der API — zeigt den historischen Schnitt der Spielsumme\nfunction h2hLine(h2h, homeTeam, awayTeam) {\n  if (!h2h || !h2h.available) return 'H2H: Keine Daten';\n  const diff = h2h.avg_point_diff > 0\n    ? `+${h2h.avg_point_diff} ${homeTeam}`\n    : `+${Math.abs(h2h.avg_point_diff)} ${awayTeam}`;\n  const totalStr = h2h.avg_game_total ? ` | H2H Total: ${h2h.avg_game_total}` : '';\n  return `H2H: ${homeTeam} ${h2h.home_team_wins}-${h2h.away_team_wins} ${awayTeam} | Ø ${diff}${totalStr}`;\n}\n\n// Konfidenz → farbiges Kreissymbol\n// Telegram unterstützt keine Farben, aber diese Unicode-Kreise sind lesbar\nfunction confidenceEmoji(confidence) {\n  if (confidence === 'Hoch')   return '🟢';\n  if (confidence === 'Mittel') return '🟡';\n  return '🔴';\n}\n\n// Verletzungsprofil als kompakte Inline-Zusammenfassung\n// Zeigt nur Dimensionen mit Impact > 3 (sonst zu viel Lärm)\n// Beispiel: \" [Off 5.2 | PG 4.1 | Rim 7.3]\"\nfunction injuryProfileLine(profile) {\n  if (!profile) return '';\n  const parts = [];\n  if ((profile.offense_impact        || 0) > 3) parts.push(`Off ${Number(profile.offense_impact).toFixed(1)}`);\n  if ((profile.defense_impact        || 0) > 3) parts.push(`Def ${Number(profile.defense_impact).toFixed(1)}`);\n  if ((profile.playmaking_impact     || 0) > 3) parts.push(`PG ${Number(profile.playmaking_impact).toFixed(1)}`);\n  if ((profile.shooting_impact       || 0) > 3) parts.push(`Shoot ${Number(profile.shooting_impact).toFixed(1)}`);\n  if ((profile.rim_protection_impact || 0) > 3) parts.push(`Rim ${Number(profile.rim_protection_impact).toFixed(1)}`);\n  return parts.length > 0 ? ` [${parts.join(' | ')}]` : '';\n}\n\n// ─────────────────────────────────────────────────────────────────────\n// Hauptlogik\n// ─────────────────────────────────────────────────────────────────────\n\n// $input.all() = alle Items die von AI Agent kommen (1 pro Spiel)\n// $('If').all() = alle Items die durch den If-Filter kamen (selbe Reihenfolge!)\n// Wichtig: beide Arrays haben gleiche Länge und gleiche Reihenfolge,\n// weil AI Agent pro Input-Item genau ein Output-Item erzeugt.\nconst allOutputs = $input.all();\nconst ifItems    = $('If').all();\n\nconst blocks = [];  // Sammlung aller Nachrichten-Blöcke\n\nallOutputs.forEach((item, index) => {\n  const aiOutput = item.json.output || '';\n\n  // gameData enthält alle berechneten Felder (Stats, Injuries, Features etc.)\n  // Wir holen sie aus dem If-Node, weil der AI Agent diese Felder strippt\n  // (AI Agent gibt nur { output: \"...\" } zurück, nicht die Eingangsdaten)\n  const gameData = ifItems[index]?.json || {};\n  const hs   = gameData.home_stats || {};\n  const as_  = gameData.away_stats || {};\n  const fb   = gameData.feature_breakdown || {};\n  const mc   = gameData.market_correction || {};\n  const tp   = gameData.totals_pick || {};\n  const homeTeam  = gameData.home_team || '';\n  const awayTeam  = gameData.away_team || '';\n  const conf      = gameData.confidence || '';\n  const homeInj   = gameData.home_injuries_structured || {};\n  const awayInj   = gameData.away_injuries_structured || {};\n\n  // Prüfe ob ML-Pick empfohlen wurde\n  const hasMLPick     = aiOutput.includes('JA SETZEN');\n\n  // Prüfe ob ein guter Totals-Pick vorliegt\n  // (direction = \"Over\"/\"Under\", Confidence nicht \"Niedrig\")\n  const hasTotalsPick = tp.direction && tp.confidence !== 'Niedrig';\n\n  // Weder ML noch Totals → dieses Spiel komplett überspringen\n  if (!hasMLPick && !hasTotalsPick) return;\n\n  let block = '';\n\n  if (hasMLPick) {\n    // ── Fall 1: ML-Pick vorhanden ──────────────────────────────────\n    // AI-Text aufbereiten: Schlüsselwörter durch fettgedruckte Markdown-Versionen ersetzen\n    // Telegram unterstützt *fett* und _kursiv_ im MarkdownV2-Modus\n    const confEmoji = confidenceEmoji(conf);\n    let aiText = aiOutput\n      .replace('SPIEL:',       '🏟 *SPIEL:*')\n      .replace('TIPP:',        '✅ *TIPP:*')\n      .replace('QUOTE:',       '💰 *QUOTE:*')\n      .replace(/KONFIDENZ: (\\S+)/, `📊 *KONFIDENZ:* ${confEmoji} $1`)\n      .replace('BEGRÜNDUNG:',  '📝 *BEGRÜNDUNG:*')\n      .replace('EMPFEHLUNG:',  '🎯 *EMPFEHLUNG:*');\n\n    block = aiText;\n  } else {\n    // ── Fall 2: Nur Totals-Pick (ML war SKIP) ─────────────────────\n    // Wir zeigen einen eigenen Header, kein AI-Text\n    block = `🏟 *SPIEL:* ${homeTeam} vs ${awayTeam}\\n`;\n    block += `📊 *NUR TOTALS-PICK* (Moneyline kein Value)`;\n  }\n\n  // ── Form & Fatigue (immer anzeigen) ───────────────────────────────\n  // rest_days = Tage seit letztem Spiel → 1 = gestern gespielt (B2B-Risiko)\n  block += `\\n\\n📈 *Form (letzte 10 | letzte 2):*`;\n  block += `\\n  ${homeTeam}: ${hs.last_10_record || 'N/A'}${streakLabel(hs.streak)}${momentumLabel(fb.home_momentum)}${hs.back_to_back ? ' ⚠️B2B' : ''} | Rest: ${hs.rest_days ?? '?'}T`;\n  block += `\\n  ${awayTeam}: ${as_.last_10_record || 'N/A'}${streakLabel(as_.streak)}${momentumLabel(fb.away_momentum)}${as_.back_to_back ? ' ⚠️B2B' : ''} | Rest: ${as_.rest_days ?? '?'}T`;\n  block += `\\n🤝 ${h2hLine(gameData.h2h, homeTeam, awayTeam)}`;\n\n  // ── Net-Rating-Differenz ───────────────────────────────────────────\n  // net_pts_diff = (eigene PPG) - (Gegner-PPG der letzten 10 Spiele)\n  // positiver Wert = mehr Punkte erzielt als kassiert → gute Offensiv/Defensivbilanz\n  if (hs.net_pts_diff !== undefined || as_.net_pts_diff !== undefined) {\n    const hNet = hs.net_pts_diff;\n    const aNet = as_.net_pts_diff;\n    block += `\\n📊 *Net-Δ:* ${homeTeam} ${hNet > 0 ? '+' : ''}${hNet} | ${awayTeam} ${aNet > 0 ? '+' : ''}${aNet}`;\n  }\n\n  // ── Verletzungsprofil ──────────────────────────────────────────────\n  // Nur anzeigen wenn mindestens ein Team betroffen ist (Score > 0)\n  const homeInjScore = homeInj.injury_impact_score || 0;\n  const awayInjScore = awayInj.injury_impact_score || 0;\n  if (homeInjScore > 0 || awayInjScore > 0) {\n    const homeProfileStr = injuryProfileLine(homeInj.injury_profile);\n    const awayProfileStr = injuryProfileLine(awayInj.injury_profile);\n    const homeAbs = (homeInj.key_absences || []).join(', ') || 'keine';\n    const awayAbs = (awayInj.key_absences || []).join(', ') || 'keine';\n    block += `\\n🏥 *Verletzungen:*`;\n    block += `\\n  ${homeTeam}: ${homeInjScore}${homeProfileStr} | ${homeAbs}`;\n    block += `\\n  ${awayTeam}: ${awayInjScore}${awayProfileStr} | ${awayAbs}`;\n  }\n\n  // ── Markt-Korrektur-Info (nur bei ML-Pick relevant) ───────────────\n  // clamped_edge = tatsächliche Abweichung vom Markt nach Clamping\n  // Wenn raw_edge ≠ clamped_edge: Modell wollte stärker abweichen, wurde aber begrenzt\n  if (hasMLPick && mc.clamped_edge !== undefined) {\n    const wasClipped = mc.raw_edge !== mc.clamped_edge;\n    const clampInfo  = wasClipped\n      ? ` (geclampt von ${(mc.raw_edge * 100).toFixed(1)}%)`\n      : '';\n    block += `\\n📐 *Markt-Korrektur:* ${(mc.clamped_edge * 100).toFixed(1)}%${clampInfo} | max ±${(mc.max_deviation * 100).toFixed(0)}%`;\n  }\n\n  // ── Totals-Pick ────────────────────────────────────────────────────\n  // signal_strength = Differenz zwischen erwartetem und Markt-Total in Punkten\n  // reasons = Liste der Faktoren die das Signal treiben (z.B. \"Shooters out -2.1\")\n  if (hasTotalsPick) {\n    const totalsEmoji  = tp.direction === 'Over' ? '📈' : '📉';\n    const reasonsStr   = (tp.reasons || []).length > 0\n      ? ` | ${tp.reasons.join(', ')}`\n      : '';\n    block += `\\n\\n${totalsEmoji} *Totals:* ${tp.direction} ${tp.line}`;\n    block += ` | Erwartet: ${tp.expected}${reasonsStr}`;\n    block += ` | ${confidenceEmoji(tp.confidence)} ${tp.confidence}`;\n  }\n\n  blocks.push(block);\n});\n\n// ── Abschlussnachricht ─────────────────────────────────────────────\n// Wenn blocks leer ist: keine einzige Empfehlung heute\nif (blocks.length === 0) {\n  return [{ json: { message: '🏀 NBA Analyse heute\\n\\nKeine Value Bets mit ausreichender Konfidenz gefunden. ✋' } }];\n}\n\n// Alle Blöcke mit Trennlinie zusammensetzen\nlet message = `🏀 *NBA VALUE BETS – ${new Date().toLocaleDateString('de-DE')}*\\n`;\nmessage += '━━━━━━━━━━━━━━━━\\n\\n';\nmessage += blocks.join('\\n\\n━━━━━━━━━━━━━━━━\\n\\n');\n\nreturn [{ json: { message } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        -32
+      ],
+      "id": "63ae4d8a-e21e-4620-b58c-3a1f1496427a",
+      "name": "Format Telegram Message"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        3504,
+        -32
+      ],
+      "id": "845f3e94-0d53-42e7-9c60-278b14f3d536",
+      "name": "Send a text message",
+      "webhookId": "fcec3c78-1047-4b25-ab11-9f0693dfd320",
+      "credentials": {
+        "telegramApi": {
+          "id": "YOUR_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const TEAM_MAP = {\n  \"Atlanta Hawks\": \"Atlanta Hawks\",\n  \"Boston Celtics\": \"Boston Celtics\",\n  \"Brooklyn Nets\": \"Brooklyn Nets\",\n  \"Charlotte Hornets\": \"Charlotte Hornets\",\n  \"Chicago Bulls\": \"Chicago Bulls\",\n  \"Cleveland Cavaliers\": \"Cleveland Cavaliers\",\n  \"Dallas Mavericks\": \"Dallas Mavericks\",\n  \"Denver Nuggets\": \"Denver Nuggets\",\n  \"Detroit Pistons\": \"Detroit Pistons\",\n  \"Golden State Warriors\": \"Golden State Warriors\",\n  \"GS Warriors\": \"Golden State Warriors\",\n  \"Houston Rockets\": \"Houston Rockets\",\n  \"Indiana Pacers\": \"Indiana Pacers\",\n  \"LA Clippers\": \"Los Angeles Clippers\",\n  \"Los Angeles Clippers\": \"Los Angeles Clippers\",\n  \"Los Angeles Lakers\": \"Los Angeles Lakers\",\n  \"LA Lakers\": \"Los Angeles Lakers\",\n  \"Memphis Grizzlies\": \"Memphis Grizzlies\",\n  \"Miami Heat\": \"Miami Heat\",\n  \"Milwaukee Bucks\": \"Milwaukee Bucks\",\n  \"Minnesota Timberwolves\": \"Minnesota Timberwolves\",\n  \"New Orleans Pelicans\": \"New Orleans Pelicans\",\n  \"NOP Pelicans\": \"New Orleans Pelicans\",\n  \"New York Knicks\": \"New York Knicks\",\n  \"NY Knicks\": \"New York Knicks\",\n  \"Oklahoma City Thunder\": \"Oklahoma City Thunder\",\n  \"OKC Thunder\": \"Oklahoma City Thunder\",\n  \"Orlando Magic\": \"Orlando Magic\",\n  \"Philadelphia 76ers\": \"Philadelphia 76ers\",\n  \"Philly 76ers\": \"Philadelphia 76ers\",\n  \"Phoenix Suns\": \"Phoenix Suns\",\n  \"Portland Trail Blazers\": \"Portland Trail Blazers\",\n  \"Sacramento Kings\": \"Sacramento Kings\",\n  \"San Antonio Spurs\": \"San Antonio Spurs\",\n  \"Toronto Raptors\": \"Toronto Raptors\",\n  \"Utah Jazz\": \"Utah Jazz\",\n  \"Washington Wizards\": \"Washington Wizards\"\n};\n\nreturn $input.all().map(item => {\n  const j = item.json;\n\n  return {\n    json: {\n      ...j,\n      home_team_normalized: TEAM_MAP[j.home_team] || j.home_team,\n      away_team_normalized: TEAM_MAP[j.away_team] || j.away_team\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        0
+      ],
+      "id": "821b9c84-f8ba-47f5-850b-ba102cbe8dbb",
+      "name": "Normalize Team Names"
+    },
+    {
+      "parameters": {
+        "jsCode": "const injuryData = $('Get NBA Injuries').first().json;\n\n// Spielerdaten (Net-Rating + Geburtsjahr) vom lokalen API-Server\nlet playerData = {};\ntry {\n  const resp = await fetch('http://YOUR_SERVER_IP:5001/player_data');\n  playerData = await resp.json();\n} catch(e) {\n  playerData = {};\n}\n\nconst currentYear = new Date().getFullYear();\n\nconst STAR_WEIGHTS = {\n  \"Nikola Jokic\": 10, \"Luka Doncic\": 10, \"Giannis Antetokounmpo\": 10,\n  \"Shai Gilgeous-Alexander\": 10, \"Joel Embiid\": 10, \"Victor Wembanyama\": 10,\n  \"Jayson Tatum\": 9, \"Anthony Davis\": 9, \"LeBron James\": 9,\n  \"Kevin Durant\": 9, \"Stephen Curry\": 9, \"Zion Williamson\": 9,\n  \"Devin Booker\": 8, \"Jaylen Brown\": 8, \"Jalen Brunson\": 8,\n  \"Donovan Mitchell\": 8, \"Tyrese Haliburton\": 8, \"Jimmy Butler\": 8,\n  \"Paolo Banchero\": 8, \"LaMelo Ball\": 8, \"Karl-Anthony Towns\": 8,\n  \"Kawhi Leonard\": 8, \"Tyrese Maxey\": 8, \"Evan Mobley\": 8,\n  \"Trae Young\": 8, \"Domantas Sabonis\": 8, \"De'Aaron Fox\": 8, \"Ja Morant\": 8,\n  \"Bam Adebayo\": 7, \"Franz Wagner\": 7, \"Brandon Miller\": 7,\n  \"Dejounte Murray\": 7, \"Cade Cunningham\": 7, \"Darius Garland\": 7,\n  \"Tyler Herro\": 7, \"James Harden\": 7, \"Jaren Jackson Jr.\": 7,\n  \"Desmond Bane\": 7, \"DeMar DeRozan\": 7, \"Zach LaVine\": 7,\n  \"OG Anunoby\": 6, \"Mikal Bridges\": 6, \"Trey Murphy III\": 6,\n  \"Trey Murphy\": 6, \"Jarrett Allen\": 6\n};\n\nconst POSITION_MAP = {\n  \"Shai Gilgeous-Alexander\": \"PG\", \"Luka Doncic\": \"PG\", \"Stephen Curry\": \"PG\",\n  \"Trae Young\": \"PG\", \"Tyrese Haliburton\": \"PG\", \"Jalen Brunson\": \"PG\",\n  \"Donovan Mitchell\": \"PG\", \"LaMelo Ball\": \"PG\", \"Darius Garland\": \"PG\",\n  \"De'Aaron Fox\": \"PG\", \"Ja Morant\": \"PG\", \"Cade Cunningham\": \"PG\",\n  \"Tyrese Maxey\": \"PG\", \"Dejounte Murray\": \"PG\", \"James Harden\": \"PG\",\n  \"Devin Booker\": \"SG\", \"Jaylen Brown\": \"SG\", \"Tyler Herro\": \"SG\",\n  \"Desmond Bane\": \"SG\", \"Zach LaVine\": \"SG\", \"DeMar DeRozan\": \"SG\",\n  \"Mikal Bridges\": \"SG\", \"OG Anunoby\": \"SG\",\n  \"Jayson Tatum\": \"SF\", \"LeBron James\": \"SF\", \"Kevin Durant\": \"SF\",\n  \"Kawhi Leonard\": \"SF\", \"Jimmy Butler\": \"SF\", \"Franz Wagner\": \"SF\",\n  \"Paolo Banchero\": \"SF\", \"Trey Murphy III\": \"SF\", \"Trey Murphy\": \"SF\",\n  \"Brandon Miller\": \"SF\", \"Zion Williamson\": \"SF\",\n  \"Giannis Antetokounmpo\": \"PF\", \"Anthony Davis\": \"PF\", \"Karl-Anthony Towns\": \"PF\",\n  \"Evan Mobley\": \"PF\", \"Domantas Sabonis\": \"PF\", \"Jaren Jackson Jr.\": \"PF\",\n  \"Bam Adebayo\": \"PF\",\n  \"Nikola Jokic\": \"C\", \"Joel Embiid\": \"C\", \"Victor Wembanyama\": \"C\",\n  \"Jarrett Allen\": \"C\", \"Rudy Gobert\": \"C\"\n};\n\nconst DEFENSIVE_ANCHORS = new Set([\n  \"Rudy Gobert\", \"Anthony Davis\", \"Bam Adebayo\", \"Evan Mobley\",\n  \"Victor Wembanyama\", \"Jaren Jackson Jr.\", \"Brook Lopez\",\n  \"Draymond Green\", \"OG Anunoby\", \"Mikal Bridges\"\n]);\n\nconst RIM_PROTECTORS = new Set([\n  \"Rudy Gobert\", \"Anthony Davis\", \"Bam Adebayo\", \"Evan Mobley\",\n  \"Victor Wembanyama\", \"Jaren Jackson Jr.\", \"Brook Lopez\",\n  \"Myles Turner\", \"Jarrett Allen\", \"Nikola Jokic\", \"Joel Embiid\"\n]);\n\nconst TEAM_DEPTH = {\n  \"Boston Celtics\": 0.75, \"Oklahoma City Thunder\": 0.80, \"Denver Nuggets\": 0.80,\n  \"Minnesota Timberwolves\": 0.85, \"Cleveland Cavaliers\": 0.85, \"Golden State Warriors\": 0.85,\n  \"Los Angeles Lakers\": 0.90, \"Memphis Grizzlies\": 0.90, \"New York Knicks\": 0.90,\n  \"Miami Heat\": 0.90, \"Indiana Pacers\": 0.95, \"Milwaukee Bucks\": 0.95,\n  \"Phoenix Suns\": 0.95, \"Sacramento Kings\": 0.95, \"Dallas Mavericks\": 0.95,\n  \"New Orleans Pelicans\": 1.00, \"Atlanta Hawks\": 1.00, \"Chicago Bulls\": 1.00,\n  \"Toronto Raptors\": 1.00, \"Orlando Magic\": 1.00,\n  \"Houston Rockets\": 1.05, \"Utah Jazz\": 1.10, \"San Antonio Spurs\": 1.10,\n  \"Charlotte Hornets\": 1.15, \"Washington Wizards\": 1.20,\n  \"Detroit Pistons\": 1.20, \"Brooklyn Nets\": 1.25, \"Philadelphia 76ers\": 1.25\n};\n\nconst STATUS_MULTIPLIER = {\n  'Out': 1.0, 'Doubtful': 0.85, 'Questionable': 0.5,\n  'Probable': 0.2, 'Day-To-Day': 0.6\n};\n\nfunction getPosition(name) {\n  if (POSITION_MAP[name]) return POSITION_MAP[name];\n  const pd = playerData[name];\n  if (pd && pd.position) return pd.position;\n  return 'UNKNOWN';\n}\n\nfunction getBaseWeight(name) {\n  let base = STAR_WEIGHTS[name] || 4;\n  const pd = playerData[name];\n  if (pd && pd.net_rating > 5.0) base = Math.max(base, 8);\n  return base;\n}\n\nfunction getCommentMultiplier(comment) {\n  if (!comment) return 1.0;\n  const c = comment.toLowerCase();\n  if (c.includes('season') || c.includes('indefinitely') || c.includes('torn')) return 1.0;\n  if (c.includes('back-to-back') || c.includes('rest')) return 0.4;\n  if (c.includes('not expected') || c.includes('ruled out')) return 1.0;\n  if (c.includes('progressing') || c.includes('improving') || c.includes('expected to play')) return 0.3;\n  if (c.includes('limited') || c.includes('restricted')) return 0.7;\n  return 1.0;\n}\n\nconst teams = injuryData.injuries || [];\nconst result = [];\n\nfor (const team of teams) {\n  const teamName = team.team?.displayName || team.team?.name || 'Unknown';\n  const injuries = team.injuries || [];\n  const teamPlayers = [];\n  let totalImpact = 0;\n  const keyAbsences = [];\n\n  // Multi-dimensional injury profile\n  let offenseImpact = 0;\n  let defenseImpact = 0;\n  let shootingImpact = 0;\n  let playmakingImpact = 0;\n  let rimProtectionImpact = 0;\n  let reboundingImpact = 0;\n\n  const starAbsences = [];\n  const starterAbsences = [];\n  const rotationAbsences = [];\n  const shootingAbsencesList = [];\n  const rimProtectorAbsencesList = [];\n\n  // Position cluster tracking (Out + Doubtful only)\n  const positionCounts = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };\n\n  for (const injury of injuries) {\n    const name = injury.athlete?.displayName || injury.athlete?.shortName || '';\n    const status = injury.status || 'Questionable';\n    const shortComment = injury.shortComment || injury.comment || '';\n    const baseWeight = getBaseWeight(name);\n    const statusMult = STATUS_MULTIPLIER[status] || 0.3;\n    const commentMult = getCommentMultiplier(shortComment);\n    const pd = playerData[name] || null;\n\n    const impact = Number((baseWeight * statusMult * commentMult).toFixed(2));\n    const position = getPosition(name);\n    const isHardOut = ['Out', 'Doubtful'].includes(status);\n    const isQuestionable = status === 'Questionable' || status === 'Day-To-Day';\n\n    // Cluster tracking (only hard outs)\n    if (isHardOut && positionCounts[position] !== undefined) {\n      positionCounts[position]++;\n    }\n\n    // Role-based dimensional impact (Out + Doubtful + Questionable)\n    if (isHardOut || isQuestionable) {\n      const dimWeight = isHardOut ? 1.0 : 0.5;\n\n      if (['PG', 'SG', 'SF'].includes(position)) {\n        offenseImpact += impact * dimWeight;\n      }\n      if (DEFENSIVE_ANCHORS.has(name)) {\n        defenseImpact += impact * dimWeight * 1.5;\n      }\n      if (['SG', 'SF'].includes(position)) {\n        shootingImpact += impact * dimWeight;\n        if (isHardOut) shootingAbsencesList.push(name);\n      }\n      if (position === 'PG') {\n        playmakingImpact += impact * dimWeight;\n      }\n      if (RIM_PROTECTORS.has(name)) {\n        rimProtectionImpact += impact * dimWeight;\n        if (isHardOut) rimProtectorAbsencesList.push(name);\n      }\n      if (['C', 'PF'].includes(position)) {\n        reboundingImpact += impact * dimWeight;\n      }\n    }\n\n    // Total impact (for backward compat + overall score)\n    if (isHardOut) {\n      totalImpact += impact;\n      if (baseWeight >= 7) keyAbsences.push(name);\n      // Absence classification\n      if (baseWeight >= 9) starAbsences.push(name);\n      else if (baseWeight >= 7) starterAbsences.push(name);\n      else rotationAbsences.push(name);\n    } else if (isQuestionable) {\n      totalImpact += impact * 0.5;\n    } else if (status === 'Probable') {\n      totalImpact += impact * 0.15;\n    }\n\n    const age = pd ? currentYear - pd.birth_year : null;\n    teamPlayers.push({\n      name, status, position,\n      base_weight: baseWeight,\n      status_multiplier: statusMult,\n      comment_multiplier: commentMult,\n      impact,\n      shortComment: shortComment ? true : false,\n      age,\n      birth_year: pd?.birth_year || null,\n      net_rating: pd?.net_rating || null\n    });\n  }\n\n  // Cluster detection\n  let clusterMultiplier = 1.0;\n  let clusterDetected = false;\n  let clusterType = null;\n  for (const [pos, count] of Object.entries(positionCounts)) {\n    if (count >= 3) {\n      clusterMultiplier = Math.max(clusterMultiplier, 1.30);\n      clusterDetected = true;\n      clusterType = `${pos}_cluster_major`;\n    } else if (count >= 2) {\n      clusterMultiplier = Math.max(clusterMultiplier, 1.15);\n      if (!clusterDetected) { clusterDetected = true; clusterType = `${pos}_cluster`; }\n    }\n  }\n\n  // Playmaker bonus (alle PGs out)\n  const playmakingBonus = positionCounts['PG'] >= 2 ? 5.0 : 0;\n\n  // Depth multiplier\n  const depthMult = TEAM_DEPTH[teamName] || 1.0;\n\n  const finalScore = Number((totalImpact * clusterMultiplier * depthMult + playmakingBonus).toFixed(2));\n\n  result.push({\n    json: {\n      team_name: teamName,\n      injury_data: {\n        injury_impact_score: finalScore,\n        total_injuries: injuries.length,\n        out_count: teamPlayers.filter(p => p.status === 'Out').length,\n        questionable_count: teamPlayers.filter(p => p.status === 'Questionable').length,\n        doubtful_count: teamPlayers.filter(p => p.status === 'Doubtful').length,\n        probable_count: teamPlayers.filter(p => p.status === 'Probable').length,\n        key_absences: keyAbsences,\n        players: teamPlayers,\n        cluster_detected: clusterDetected,\n        cluster_type: clusterType,\n        cluster_multiplier: clusterMultiplier,\n        playmaker_bonus: playmakingBonus,\n        depth_multiplier: depthMult,\n        injury_profile: {\n          offense_impact:       Number(offenseImpact.toFixed(2)),\n          defense_impact:       Number(defenseImpact.toFixed(2)),\n          shooting_impact:      Number(shootingImpact.toFixed(2)),\n          playmaking_impact:    Number(playmakingImpact.toFixed(2)),\n          rim_protection_impact: Number(rimProtectionImpact.toFixed(2)),\n          rebounding_impact:    Number(reboundingImpact.toFixed(2))\n        },\n        star_absences:             starAbsences,\n        starter_absences:          starterAbsences,\n        rotation_absences:         rotationAbsences,\n        shooting_absences:         shootingAbsencesList,\n        rim_protector_absences:    rimProtectorAbsencesList,\n        position_cluster:          positionCounts\n      }\n    }\n  });\n}\n\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        320
+      ],
+      "id": "3ec6220e-a499-46fb-b330-6003630d78ac",
+      "name": "Normalize Injuries"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1552,
+        -32
+      ],
+      "id": "bcf1e23e-63ae-45c0-b7a2-bbb94cbebd6d",
+      "name": "Merge Odds + Stats"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $input.all().map(item => item.json);\n\nconst injuryItems = allItems.filter(item => item.team_name && item.injury_data);\nconst gameItems  = allItems.filter(item => item.home_stats && item.away_stats);\n\nconst injuryMap = {};\nfor (const item of injuryItems) injuryMap[item.team_name] = item.injury_data;\n\n// B2B: Questionable 0.5→0.85, Probable 0.15→0.4 + Alters-Faktor (>32J = x1.2)\nconst currentYear = new Date().getFullYear();\nfunction applyB2BMultiplier(injuryData, isB2B) {\n  if (!isB2B || !injuryData) return injuryData;\n  const b2bStatusMap = { 'Questionable': 0.85, 'Probable': 0.4, 'Day-To-Day': 0.55 };\n  const adjustedPlayers = (injuryData.players || []).map(p => {\n    const newMulti = b2bStatusMap[p.status] || p.status_multiplier;\n    let newImpact = Number((p.base_weight * newMulti).toFixed(2));\n    // Alters-Faktor: Spieler über 32 → x1.2 bei B2B\n    const age = p.age || (currentYear - (p.birth_year || currentYear));\n    if (age > 32) newImpact = Number((newImpact * 1.2).toFixed(2));\n    return { ...p, status_multiplier: newMulti, impact: newImpact, b2b_adjusted: true, age_factor_applied: age > 32 };\n  });\n  const rawImpact = adjustedPlayers.reduce((s, p) => s + p.impact, 0);\n  const newScore  = Number((rawImpact * (injuryData.cluster_multiplier || 1.0) * (injuryData.depth_multiplier || 1.0) + (injuryData.playmaker_bonus || 0)).toFixed(2));\n  return { ...injuryData, players: adjustedPlayers, injury_impact_score: newScore, b2b_adjusted: true };\n}\n\nconst emptyInjury = { total_injuries: 0, out_count: 0, questionable_count: 0,\n  doubtful_count: 0, probable_count: 0, injury_impact_score: 0,\n  key_absences: [], players: [], cluster_detected: false, cluster_type: null,\n  cluster_multiplier: 1.0, playmaker_bonus: 0, depth_multiplier: 1.0 };\n\nreturn gameItems.map(game => {\n  const homeTeam = game.home_stats?.team_name || game.home_team_normalized;\n  const awayTeam = game.away_stats?.team_name || game.away_team_normalized;\n  const homeB2B  = game.home_stats?.back_to_back || false;\n  const awayB2B  = game.away_stats?.back_to_back || false;\n\n  const homeInj = applyB2BMultiplier(injuryMap[homeTeam] || emptyInjury, homeB2B);\n  const awayInj = applyB2BMultiplier(injuryMap[awayTeam] || emptyInjury, awayB2B);\n\n  return {\n    json: {\n      ...game,\n      home_injuries_structured: homeInj,\n      away_injuries_structured: awayInj\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        -16
+      ],
+      "id": "6cf050b1-4af7-40cf-a9d0-40e0068d8de2",
+      "name": "Attach Injuries"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1760,
+        -16
+      ],
+      "id": "f9af75ca-6464-4fcd-9a9c-118f7d7b7515",
+      "name": "Merge Injuries"
+    },
+    {
+      "parameters": {
+        "jsCode": "function clamp(num, min, max) {\n  return Math.max(min, Math.min(max, num));\n}\n\nfunction parseRecord(record) {\n  if (!record || typeof record !== 'string' || !record.includes('-')) return 0.5;\n  const [w, l] = record.split('-').map(Number);\n  const total = w + l;\n  return total > 0 ? w / total : 0.5;\n}\n\nreturn $input.all().map(item => {\n  const j = item.json;\n\n  const home = j.home_stats || {};\n  const away = j.away_stats || {};\n  const homeProf = j.home_injuries_structured?.injury_profile || {};\n  const awayProf = j.away_injuries_structured?.injury_profile || {};\n\n  const homeForm = parseRecord(home.last_10_record);\n  const awayForm = parseRecord(away.last_10_record);\n\n  const homeFG = Number(home.avg_fg_pct || 0);\n  const awayFG = Number(away.avg_fg_pct || 0);\n  const fgDiff = homeFG - awayFG;\n  const fgEdge = Math.abs(fgDiff) >= 3 ? fgDiff * 0.003 : 0;\n\n  const homeInjury = Number(j.home_injuries_structured?.injury_impact_score || 0);\n  const awayInjury = Number(j.away_injuries_structured?.injury_impact_score || 0);\n  const injuryGap  = Math.abs(homeInjury - awayInjury);\n  const injuryEdge = (awayInjury - homeInjury) * 0.015;\n\n  const formEdge = (homeForm - awayForm) * 0.10;\n\n  // Momentum: letzte 2 Spiele\n  const homeLast2 = (home.recent_games || []).slice(0, 2);\n  const awayLast2 = (away.recent_games || []).slice(0, 2);\n  const homeMomentum = homeLast2.filter(g => g.wl === 'W').length;\n  const awayMomentum = awayLast2.filter(g => g.wl === 'W').length;\n  const momentumEdge = ((homeMomentum - awayMomentum) / 2) * 0.02;\n\n  // Streak-Edge\n  const homeStreak    = home.streak || '';\n  const awayStreak    = away.streak || '';\n  const homeStreakType = homeStreak[0];\n  const homeStreakLen  = parseInt(homeStreak.slice(1)) || 0;\n  const awayStreakType = awayStreak[0];\n  const awayStreakLen  = parseInt(awayStreak.slice(1)) || 0;\n  let streakEdge = 0;\n  if (homeStreakType === 'W' && homeStreakLen >= 3) streakEdge += 0.02;\n  if (homeStreakType === 'L' && homeStreakLen >= 3) streakEdge -= 0.02;\n  if (awayStreakType === 'W' && awayStreakLen >= 3) streakEdge -= 0.02;\n  if (awayStreakType === 'L' && awayStreakLen >= 3) streakEdge += 0.02;\n\n  // B2B-Edge\n  const homeB2B = home.back_to_back || false;\n  const awayB2B = away.back_to_back || false;\n  let b2bEdge = 0;\n  if (homeB2B) b2bEdge -= 0.04;\n  if (awayB2B) b2bEdge += 0.04;\n\n  // H2H-Edge\n  let h2hEdge = 0;\n  const h2h = j.h2h;\n  if (h2h && h2h.available && h2h.games_found >= 3) {\n    h2hEdge = (h2h.home_win_pct - 0.5) * 0.06;\n  }\n\n  // Net-Rating Edge (PPG differential from stats API)\n  const homeNetPts = Number(home.net_pts_diff || 0);\n  const awayNetPts = Number(away.net_pts_diff || 0);\n  const netRatingEdge = clamp((homeNetPts - awayNetPts) * 0.003, -0.02, 0.02);\n\n  const marketBase = Number(j.market_home_prob_novig || 0.5);\n\n  // ======== MARKET CORRECTION CLAMPING (Punkt 2) ========\n  // Max ±6% normal, ±12% mit starken Faktoren\n  const hasStrongFactor =\n    injuryGap > 8 ||\n    homeB2B || awayB2B ||\n    Math.abs(h2hEdge) > 0.02 ||\n    Math.abs(homeNetPts - awayNetPts) > 5;\n\n  const maxDeviation = hasStrongFactor ? 0.12 : 0.06;\n\n  const rawEdge = formEdge + fgEdge + injuryEdge + streakEdge + b2bEdge + h2hEdge + momentumEdge + netRatingEdge;\n  const clampedEdge = clamp(rawEdge, -maxDeviation, maxDeviation);\n\n  let modelHomeProb = clamp(marketBase + clampedEdge, 0.15, 0.85);\n  const modelAwayProb = 1 - modelHomeProb;\n\n  const bestHomeOdds = Number(j.best_home_odds || 0);\n  const bestAwayOdds = Number(j.best_away_odds || 0);\n\n  const evHome = bestHomeOdds ? modelHomeProb * bestHomeOdds - 1 : -1;\n  const evAway = bestAwayOdds ? modelAwayProb * bestAwayOdds - 1 : -1;\n\n  let valueSide = \"SKIP\";\n  let valueEV   = 0;\n  let valueOdds = null;\n\n  if (evHome > evAway && evHome > 0.05) {\n    valueSide = j.home_team; valueEV = evHome; valueOdds = bestHomeOdds;\n  } else if (evAway > evHome && evAway > 0.05) {\n    valueSide = j.away_team; valueEV = evAway; valueOdds = bestAwayOdds;\n  }\n\n  // ======== TOTALS ANALYSIS (Punkt 6) ========\n  const avgTotal   = Number(j.avg_total || 0);\n  const homePPG    = Number(home.avg_pts     || 110);\n  const awayPPG    = Number(away.avg_pts     || 110);\n  const homeOppPPG = Number(home.avg_opp_pts || homePPG);\n  const awayOppPPG = Number(away.avg_opp_pts || awayPPG);\n\n  // Expected total: blended attack/defense matchup\n  const homeExpected = (homePPG + awayOppPPG) / 2;\n  const awayExpected = (awayPPG + homeOppPPG) / 2;\n  const baseExpected = homeExpected + awayExpected;\n\n  // Shooter out → Under\n  const homeShootingOut = Number(homeProf.shooting_impact || 0);\n  const awayShootingOut = Number(awayProf.shooting_impact || 0);\n  const shootingUnder = (homeShootingOut + awayShootingOut) * 0.40;\n\n  // Rim protector out → Over (easier to score)\n  const homeRimOut = Number(homeProf.rim_protection_impact || 0);\n  const awayRimOut = Number(awayProf.rim_protection_impact || 0);\n  const rimOver = (homeRimOut + awayRimOut) * 0.30;\n\n  // B2B → Under (fatigue, slower pace)\n  const b2bUnder = (homeB2B ? 2.5 : 0) + (awayB2B ? 2.5 : 0);\n\n  // Short rest → Under\n  const homeRest = Number(home.rest_days || 2);\n  const awayRest = Number(away.rest_days || 2);\n  const restUnder = (homeRest <= 1 ? 1.5 : 0) + (awayRest <= 1 ? 1.5 : 0);\n\n  // Playmaking out → Under (fewer good looks)\n  const homePMOut = Number(homeProf.playmaking_impact || 0);\n  const awayPMOut = Number(awayProf.playmaking_impact || 0);\n  const playmakingUnder = (homePMOut + awayPMOut) * 0.20;\n\n  const totalsAdjustment = rimOver - shootingUnder - b2bUnder - restUnder - playmakingUnder;\n  const adjustedExpected = Number((baseExpected + totalsAdjustment).toFixed(1));\n\n  let totalsDirection    = null;\n  let totalsEdgePts      = 0;\n  let totalsSignalStrength = 0;\n  let totalsEV           = 0;\n  let totalsReasons      = [];\n\n  if (avgTotal > 0) {\n    totalsEdgePts = adjustedExpected - avgTotal;\n    totalsDirection = totalsEdgePts > 0 ? 'Over' : 'Under';\n    totalsSignalStrength = Number(Math.abs(totalsEdgePts).toFixed(1));\n\n    // Reasons list for transparency\n    if (shootingUnder > 0)    totalsReasons.push(`Shooters out -${shootingUnder.toFixed(1)}`);\n    if (rimOver > 0)          totalsReasons.push(`Rim out +${rimOver.toFixed(1)}`);\n    if (b2bUnder > 0)         totalsReasons.push(`B2B -${b2bUnder.toFixed(1)}`);\n    if (restUnder > 0)        totalsReasons.push(`Short rest -${restUnder.toFixed(1)}`);\n    if (playmakingUnder > 0)  totalsReasons.push(`PG out -${playmakingUnder.toFixed(1)}`);\n\n    // EV approximation (typical -110 / 1.91 odds for totals)\n    const totalsOdds = 1.91;\n    // Simple probability estimate based on signal strength\n    const totalsProb = totalsSignalStrength >= 6 ? 0.60 :\n                       totalsSignalStrength >= 4 ? 0.57 :\n                       totalsSignalStrength >= 2 ? 0.54 : 0.51;\n    totalsEV = Number((totalsProb * totalsOdds - 1).toFixed(4));\n  }\n\n  // H2H total reference\n  const h2hAvgTotal = h2h?.avg_game_total || null;\n\n  return {\n    json: {\n      ...j,\n      model_home_prob: Number(modelHomeProb.toFixed(4)),\n      model_away_prob: Number(modelAwayProb.toFixed(4)),\n      ev_home:         Number(evHome.toFixed(4)),\n      ev_away:         Number(evAway.toFixed(4)),\n      value_side:      valueSide,\n      value_ev:        Number(valueEV.toFixed(4)),\n      value_odds:      valueOdds,\n      market_correction: {\n        raw_edge:         Number(rawEdge.toFixed(4)),\n        clamped_edge:     Number(clampedEdge.toFixed(4)),\n        max_deviation:    maxDeviation,\n        has_strong_factor: hasStrongFactor\n      },\n      totals_analysis: {\n        avg_total:        avgTotal,\n        base_expected:    Number(baseExpected.toFixed(1)),\n        expected_total:   adjustedExpected,\n        totals_edge:      Number(totalsEdgePts.toFixed(1)),\n        direction:        totalsDirection,\n        signal_strength:  totalsSignalStrength,\n        shooting_under:   Number(shootingUnder.toFixed(1)),\n        rim_over:         Number(rimOver.toFixed(1)),\n        b2b_under:        b2bUnder,\n        rest_under:       restUnder,\n        playmaking_under: Number(playmakingUnder.toFixed(1)),\n        totals_ev:        totalsEV,\n        reasons:          totalsReasons,\n        h2h_avg_total:    h2hAvgTotal\n      },\n      feature_breakdown: {\n        market_base:    Number(marketBase.toFixed(4)),\n        form_edge:      Number(formEdge.toFixed(4)),\n        fg_edge:        Number(fgEdge.toFixed(4)),\n        injury_edge:    Number(injuryEdge.toFixed(4)),\n        net_rating_edge: Number(netRatingEdge.toFixed(4)),\n        streak_edge:    Number(streakEdge.toFixed(4)),\n        b2b_edge:       Number(b2bEdge.toFixed(4)),\n        h2h_edge:       Number(h2hEdge.toFixed(4)),\n        momentum_edge:  Number(momentumEdge.toFixed(4)),\n        home_momentum:  `${homeMomentum}/2`,\n        away_momentum:  `${awayMomentum}/2`\n      }\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2176,
+        -16
+      ],
+      "id": "dbdd1a9b-848b-4fb1-93e5-cfdea1c96a30",
+      "name": "Build Features / Pre-Model"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "6df0ce2a-7480-4b63-9401-670b7d5e0cb5",
+              "leftValue": "={{$json.value_side}}",
+              "rightValue": "SKIP",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "id": "7c1168ee-2087-4883-938c-c0f80b44beb8",
+              "leftValue": "={{!!$json.totals_pick?.direction && $json.totals_pick?.confidence !== 'Niedrig'}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2592,
+        -16
+      ],
+      "id": "20ffd2dc-bd22-4e8c-af26-38f4c8b64c69",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const j = item.json;\n\n  let adjustedValueSide = j.value_side;\n  let adjustedValueEV   = Number(j.value_ev || 0);\n  let confidence        = \"Niedrig\";\n\n  const odds        = Number(j.value_odds || 0);\n  const homeProb    = Number(j.model_home_prob || 0);\n  const awayProb    = Number(j.model_away_prob || 0);\n  const selectedProb = adjustedValueSide === j.home_team ? homeProb :\n                       adjustedValueSide === j.away_team ? awayProb : 0;\n\n  const homeInjScore = Number(j.home_injuries_structured?.injury_impact_score || 0);\n  const awayInjScore = Number(j.away_injuries_structured?.injury_impact_score || 0);\n  const injuryGap    = Math.abs(homeInjScore - awayInjScore);\n\n  const marketProb  = adjustedValueSide === j.home_team\n    ? Number(j.market_home_prob_novig || 0)\n    : Number(j.market_away_prob_novig || 0);\n  const divergence  = Math.abs(selectedProb - marketProb);\n  const probGap     = selectedProb - marketProb;\n\n  // ===== MONEYLINE GUARDRAILS =====\n\n  // 1. Odds zu hoch → skip\n  if (odds >= 8.0) {\n    adjustedValueSide = \"SKIP\"; adjustedValueEV = 0;\n  }\n  // 2. Hohe Odds nur mit starkem Edge\n  if (odds >= 5.0 && adjustedValueEV < 0.15) {\n    adjustedValueSide = \"SKIP\"; adjustedValueEV = 0;\n  }\n  // 3. Prob zu niedrig\n  if (selectedProb < 0.38) {\n    adjustedValueSide = \"SKIP\"; adjustedValueEV = 0;\n  }\n  // 4. Große Marktabweichung ohne klaren Grund → skip\n  if (divergence > 0.15 && adjustedValueEV < 0.15) {\n    adjustedValueSide = \"SKIP\"; adjustedValueEV = 0;\n  }\n  // 5. B2B: nur bei echtem Edge\n  const selectedIsHome = adjustedValueSide === j.home_team;\n  const selectedB2B = selectedIsHome\n    ? j.home_stats?.back_to_back\n    : j.away_stats?.back_to_back;\n  if (selectedB2B && adjustedValueEV < 0.12) {\n    adjustedValueSide = \"SKIP\"; adjustedValueEV = 0;\n  }\n\n  // ===== KONFIDENZ-KLASSIFIKATION (Punkt 9) =====\n  // Klare, objektive Regeln basierend auf EV, Odds, Prob, Divergenz, ProbGap\n  if (adjustedValueSide !== \"SKIP\") {\n    if (\n      adjustedValueEV >= 0.18 &&\n      odds <= 3.5 &&\n      selectedProb >= 0.62 &&\n      divergence <= 0.18 &&\n      probGap >= 0.06\n    ) {\n      confidence = \"Hoch\";\n    } else if (\n      adjustedValueEV >= 0.10 &&\n      odds <= 5.0 &&\n      selectedProb >= 0.50 &&\n      divergence <= 0.25 &&\n      probGap >= 0.05\n    ) {\n      confidence = \"Mittel\";\n    } else {\n      confidence = \"Niedrig\";\n    }\n\n    // Niedrig-Confidence → ausfiltern\n    if (confidence === \"Niedrig\") {\n      adjustedValueSide = \"SKIP\";\n      adjustedValueEV   = 0;\n    }\n  }\n\n  // ===== TOTALS PICK (Punkt 6 + 7) =====\n  const ta = j.totals_analysis || {};\n  let totalsPickDirection  = null;\n  let totalsPickConfidence = \"Niedrig\";\n  const totalsPickEV       = Number(ta.totals_ev || 0);\n  const strength           = Number(ta.signal_strength || 0);\n\n  if (ta.direction && ta.avg_total > 0) {\n    // Guardrails: signal muss stark genug sein\n    if (strength >= 6 && totalsPickEV >= 0.04) {\n      totalsPickConfidence = \"Hoch\";\n      totalsPickDirection  = ta.direction;\n    } else if (strength >= 3.5 && totalsPickEV >= 0.02) {\n      totalsPickConfidence = \"Mittel\";\n      totalsPickDirection  = ta.direction;\n    }\n    // Schwache Signale ignorieren\n    if (strength < 2.5) totalsPickDirection = null;\n  }\n\n  return {\n    json: {\n      ...j,\n      value_side:  adjustedValueSide,\n      value_ev:    Number(adjustedValueEV.toFixed(4)),\n      confidence,\n      totals_pick: {\n        direction:       totalsPickDirection,\n        confidence:      totalsPickConfidence,\n        ev:              totalsPickEV,\n        line:            ta.avg_total,\n        expected:        ta.expected_total,\n        signal_strength: strength,\n        reasons:         ta.reasons || []\n      },\n      guardrails: {\n        selected_prob: Number(selectedProb.toFixed(4)),\n        market_prob:   Number(marketProb.toFixed(4)),\n        prob_gap:      Number(probGap.toFixed(4)),\n        divergence:    Number(divergence.toFixed(4)),\n        injury_gap:    Number(injuryGap.toFixed(2)),\n        odds_checked:  odds\n      }\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2384,
+        -16
+      ],
+      "id": "73707f45-9e7c-40c3-b6a1-c9fb1fc8ddb7",
+      "name": "Refine Value / Confidence"
+    },
+    {
+      "parameters": {
+        "jsCode": "const formatter = new Intl.DateTimeFormat('en-CA', {\n  timeZone: 'Europe/Berlin',\n  year: 'numeric',\n  month: '2-digit',\n  day: '2-digit',\n});\n\nconst now = new Date();\n\n// heute Berlin\nconst todayBerlin = formatter.format(now);\n\n// morgen Berlin\nconst tomorrow = new Date(now);\ntomorrow.setDate(now.getDate() + 1);\nconst tomorrowBerlin = formatter.format(tomorrow);\n\nreturn $input.all().filter(item => {\n  const commence = item.json.commence_time;\n  if (!commence) return false;\n\n  const gameDateBerlin = formatter.format(new Date(commence));\n\n  return gameDateBerlin === todayBerlin || gameDateBerlin === tomorrowBerlin;\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        0
+      ],
+      "id": "537ce0be-79b4-4b40-8d27-477ebb4968d6",
+      "name": "Filter Target Date"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get NBA Odds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get NBA Odds": {
+      "main": [
+        [
+          {
+            "node": "Get NBA Injuries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get NBA Injuries": {
+      "main": [
+        [
+          {
+            "node": "Normalize Injuries",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Teams": {
+      "main": [
+        [
+          {
+            "node": "Filter Target Date",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Team Stats": {
+      "main": [
+        [
+          {
+            "node": "Merge Odds + Stats",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Team Names": {
+      "main": [
+        [
+          {
+            "node": "Merge Odds + Stats",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Team Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Injuries": {
+      "main": [
+        [
+          {
+            "node": "Merge Injuries",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Odds + Stats": {
+      "main": [
+        [
+          {
+            "node": "Merge Injuries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Injuries": {
+      "main": [
+        [
+          {
+            "node": "Build Features / Pre-Model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Injuries": {
+      "main": [
+        [
+          {
+            "node": "Attach Injuries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Features / Pre-Model": {
+      "main": [
+        [
+          {
+            "node": "Refine Value / Confidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refine Value / Confidence": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Target Date": {
+      "main": [
+        [
+          {
+            "node": "Normalize Team Names",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "fffd7632-ca5d-4340-a613-918093aab332",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "YOUR_INSTANCE_ID"
+  },
+  "id": "p3KeCvnyvEQeaLzS",
+  "tags": []
+}
